@@ -483,6 +483,22 @@ pthread_t tinfo;
 		printf("Warning: the framebuffer bit depth is 32-bpp, ideally it should be 16-bpp for fastest results\n");
 #endif // !_RPIZERO_
 
+// Do a quick performance test to make sure everything is working correctly
+	{
+	uint64_t llTime;
+	int iFrames = 0;
+		llTime = NanoClock() + 1000000000LL;
+		while (NanoClock() < llTime) // run for 1 second
+		{	// force total redraw each frame
+			memset(pAltScreen, 0xff, iLCDPitch * LCD_CY);
+			CopyLoop();
+			iFrames++;
+		}
+		printf("Perf test: worst case framerate = %d FPS\n", iFrames);
+		if (iFrames < 25)
+			printf("<25FPS indicates there is something not configured correctly with your SW/HW\n");
+	}
+
 	// Start screen copy thread
 	bRunning = 1;
         pthread_create(&tinfo, NULL, CopyThread, NULL);
