@@ -32,19 +32,34 @@
 #include <linux/fb.h>
 #include <spi_lcd.h>
 
+// Use dispmanx API on RPi0
+#ifdef _RPIZERO_
+#include <bcm_host.h>
+DISPMANX_DISPLAY_HANDLE_T display;
+DISPMANX_RESOURCE_HANDLE_T screen_resource;
+DISPMANX_MODEINFO_T display_info;
+VC_IMAGE_TRANSFORM_T transform;
+uint32_t image_prt;
+VC_RECT_T rect1;
+#endif // _RPIZERO_
+
 // We only support the ILI9341 (240x320), but define these just in case
 #define LCD_CX 320
 #define LCD_CY 240
 
 // Pointers to the local copies of the framebuffer
 static unsigned char *pScreen, *pAltScreen;
+#ifndef _RPIZERO_
 static unsigned char *pFB; // pointer to /dev/fb0
 static int iFBPitch; // bytes per line of /dev/fb0
-static int fbfd; // framebuffer file handle
-static int iScreenSize, iTileWidth, iTileHeight;
+static int iScreenSize;
 // Framebuffer variable and fixed info
 static struct fb_var_screeninfo vinfo;
 static struct fb_fix_screeninfo finfo;
+#endif // !_RPIZERO_
+static int iLCDPitch; // bytes per line of our LCD buffer
+static int fbfd; // framebuffer file handle
+static int iTileWidth, iTileHeight;
 static int bRunning, bShowFPS, bLCDFlip, iSPIChan, iSPIFreq, iDC, iReset, iLED;
 //
 // Get the current time in nanoseconds
@@ -79,10 +94,34 @@ struct timespec ts;
 //
 static int InitDisplay(int bLCDFlip, int iSPIChan, int iSPIFreq, int iDC, int iReset, int iLED)
 {
-	if (spilcdInit(LCD_ILI9341, bLCDFlip, iSPIChan, iSPIFreq, iDC, iReset, iLED))
-		return 1;
-	spilcdSetOrientation(LCD_ORIENTATION_LANDSCAPE);
 
+#ifdef _RPIZERO_
+{
+	int ret;
+	bcm_host_init();
+	display = vc_dispmanx_display_open(0);
+	if (!display)
+	{
+		fprintf(stderr, "Unable to open primary display\n");
+		return 1;
+	}
+	ret = vc_dispmanx_display_get_info(display, &display_info);
+	if (ret)
+	{
+		fprintf(stderr, "Unable to get primary display information\n");
+		return 1;
+	}
+	screen_resource = vc_dispmanx_resource_create(VC_IMAGE_RGB565, LCD_CX, LCD_CY, &image_prt);
+	if (!screen_resource)
+	{
+		fprintf(stderr, "Unable to create screen buffer\n");
+		close(fbfd);
+		vc_dispmanx_display_close(display);
+		return 1;
+	}
+	vc_dispmanx_rect_set(&rect1, 0, 0, LCD_CX, LCD_CY);
+}
+#else
 	// Open and map a pointer to the fb0 framebuffer
 	fbfd = open("/dev/fb0", O_RDWR);
 	if (fbfd)
@@ -99,10 +138,16 @@ static int InitDisplay(int bLCDFlip, int iSPIChan, int iSPIFreq, int iDC, int iR
 	{
 		return 1;
 	}
+#endif // _RPIZERO_
 
+	if (spilcdInit(LCD_ILI9341, bLCDFlip, iSPIChan, iSPIFreq, iDC, iReset, iLED))
+		return 1;
+	spilcdSetOrientation(LCD_ORIENTATION_LANDSCAPE);
+	
 	// Allocate 2 local copies of the framebuffer for comparison
-	pScreen = malloc(iFBPitch * vinfo.yres);
-	pAltScreen = malloc(iFBPitch * vinfo.yres); // our copy of the display
+	iLCDPitch = LCD_CX * 2;
+	pScreen = malloc(iLCDPitch * LCD_CY);
+	pAltScreen = malloc(iLCDPitch * LCD_CY); // our copy of the display
 
 	return 0;
 } /* InitDisplay() */
@@ -170,6 +215,10 @@ int iTotalChanged = 0;
 //
 static void FBCapture(void)
 {
+#ifdef _RPIZERO_
+	vc_dispmanx_snapshot(display, screen_resource, 0);
+	vc_dispmanx_resource_read_data(screen_resource, &rect1, pScreen, iLCDPitch);
+#else
 	if (vinfo.xres >= LCD_CX * 2) // need to shrink by 1/4
 	{
 		if (vinfo.bits_per_pixel == 16)
@@ -180,7 +229,7 @@ static void FBCapture(void)
 			for (y=0; y<LCD_CY; y++)
 			{
 				s = (uint32_t *)&pFB[y*2*iFBPitch];
-				d = (uint32_t *)&pScreen[y*iFBPitch];
+				d = (uint32_t *)&pScreen[y*iLCDPitch];
 				for (x=0; x<LCD_CX; x+=2)
 				{
 				// average horizontally
@@ -205,7 +254,7 @@ static void FBCapture(void)
 			for (y=0; y<LCD_CY; y++)
 			{
 				pSrc = (uint32_t *)&pFB[iFBPitch * y * 2];
-				pDest = (uint16_t *)&pScreen[iFBPitch * y];
+				pDest = (uint16_t *)&pScreen[iLCDPitch * y];
 				for (x=0; x<LCD_CX; x++)
 				{
 					u32 = pSrc[0];
@@ -231,7 +280,7 @@ static void FBCapture(void)
 			for (y=0; y<LCD_CY; y++)
 			{
 				pSrc = (uint32_t *)&pFB[iFBPitch * y];
-				pDest = (uint16_t *)&pScreen[iFBPitch * y];
+				pDest = (uint16_t *)&pScreen[iLCDPitch * y];
 				for (x=0; x<LCD_CX; x++)
 				{
 					u32 = *pSrc++;
@@ -242,6 +291,7 @@ static void FBCapture(void)
 			}
 		}
 	}
+#endif // _RPIZERO_
 } /* FBCapture() */
 
 static void CopyLoop(void)
@@ -254,7 +304,7 @@ int i, j, k, x, y;
 	FBCapture();
 
 	// divide display into 10 x 10 tiles (32x24 pixels each)
-	iChanged = FindChangedRegion(pScreen, pAltScreen, LCD_CX, LCD_CY, iFBPitch, iTileWidth, iTileHeight, u32Regions);
+	iChanged = FindChangedRegion(pScreen, pAltScreen, LCD_CX, LCD_CY, iLCDPitch, iTileWidth, iTileHeight, u32Regions);
 	if (iChanged) // some area of the image changed
 	{
 		// Copy the changed areas to our backup framebuffer
@@ -265,7 +315,7 @@ int i, j, k, x, y;
 			{
 				j = iTileHeight;
 				if (i+j > LCD_CY) j = LCD_CY - i;
-				memcpy(&pAltScreen[i*iFBPitch], (void *)&pScreen[i*iFBPitch], j * iFBPitch); // copy regions which changed
+				memcpy(&pAltScreen[i*iLCDPitch], (void *)&pScreen[i*iLCDPitch], j * iLCDPitch); // copy regions which changed
 			}
 		}
 		// Draw the changed tiles
@@ -277,7 +327,7 @@ int i, j, k, x, y;
 			{
 				if (u32Flags & 1) // this tile is dirty
 				{
-					spilcdDrawTile(x, y, iTileWidth, iTileHeight, &pAltScreen[(y*iFBPitch)+x*2], iFBPitch);
+					spilcdDrawTile(x, y, iTileWidth, iTileHeight, &pAltScreen[(y*iLCDPitch)+x*2], iLCDPitch);
 				}
 				u32Flags >>= 1; // shift down to next bit flag	
 			}
@@ -425,10 +475,13 @@ pthread_t tinfo;
 		printf("Error initializing the LCD/display\n");
 		return 0;
 	}
+
+#ifndef _RPIZERO_
 	if (vinfo.xres > 640)
 		printf("Warning: the framebuffer is too large and will not be copied properly; sipported sizes are 640x480 and 320x240\n");
 	if (vinfo.bits_per_pixel == 32)
 		printf("Warning: the framebuffer bit depth is 32-bpp, ideally it should be 16-bpp for fastest results\n");
+#endif // !_RPIZERO_
 
 	// Start screen copy thread
 	bRunning = 1;
@@ -441,6 +494,10 @@ pthread_t tinfo;
 	bRunning = 0; // tell background thread to stop
 	NanoSleep(50000000LL); // wait 50ms for work to finish
 	spilcdShutdown();
+#ifdef _RPIZERO_
+	vc_dispmanx_resource_delete(screen_resource);
+	vc_dispmanx_display_close(display);
+#endif // _RPIZERO_
 
    return 0;
 } /* main() */

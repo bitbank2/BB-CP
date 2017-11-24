@@ -1,8 +1,12 @@
+PROCESSOR:=$(shell uname -m)
+ifeq ($(PROCESSOR), armv6l)
+# Must be Raspberry Pi Zero
+CFLAGS=-c -I/opt/vc/include -Wall -O3 -D_RPIZERO_
+LIBS= -lspi_lcd -lpigpio -L/opt/vc/lib -lbcm_host -lpthread -lm
+else
 CFLAGS=-c -Wall -O3
-#LIBS= -lspi_lcd -lpthread -lm
-LIBS= -lspi_lcd -lpigpio -lpthread -lm
-#LIBS= -lspi_lcd -lwiringPi -lm -lpthread
-#LIBS= -lspi_lcd -lbcm2835 -lm
+LIBS= -lspi_lcd -lpthread -lm
+endif
 
 all: bbcp
 
