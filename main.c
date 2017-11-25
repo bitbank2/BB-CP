@@ -607,17 +607,21 @@ int iVideoFrames = 0;
 			iVideoFrames = 0;
 			llOldTime = llTime;
 		}
-		if (ns > 4000LL)
-		{
-			NanoSleep(ns-4000LL);	// don't trust sleep for the last 4us
-		}
-		else
+		if (ns < 0) // we fell behind
 		{
 			while (ns < 0)
 			{
 				ns += llFrameDelta;
 				llTargetTime += llFrameDelta;
-			}			
+			}
+// sleep at least a little to yield the thread. On a single CPU core
+// this is necessary to not starve the game emulator thread
+
+			NanoSleep(4000LL); 		
+		}
+		else // just sleep to fill the rest of the 1/60th second
+		{
+			NanoSleep(ns);
 		}
 		llTargetTime += llFrameDelta;
 	} // while running
