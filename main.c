@@ -425,6 +425,10 @@ static void FBCapture(void)
 
 //
 // Turn GPIO button presses into keyboard events
+// This would be more efficient to do as interrupt driven events
+// but reading the keys every frame takes an insignificant amount
+// of time. This allows for simpler GPIO access which will work
+// on more platforms.
 //
 void ProcessKeys(void)
 {
@@ -433,7 +437,7 @@ struct input_event ie;
 
 	memset(&ie, 0, sizeof(ie));
 
-	// loop through all of the defined keys
+	// Loop through all of the defined keys
 	for (i=0; i<iKeyDefs; i++)
 	{
 		iState = spilcdReadPin(iGPIOList[i]);
@@ -455,18 +459,23 @@ struct input_event ie;
 	} // for each key
 } /* ProcessKeys() */
 
+//
+// Copy the framebuffer changes to the LCD
+// checks for key events too
+//
 static void CopyLoop(void)
 {
 int iChanged;
 uint32_t u32Flags, u32Regions[32], *pRegions;
 int i, j, k, x, y;
 
-	ProcessKeys(); // manage GPIO keys
+	// Manage GPIO keys
+	ProcessKeys();
 
 	// Capture the current framebuffer
 	FBCapture();
 
-	// divide display into 10 x 10 tiles (32x24 pixels each)
+	// Divide display into 10 x 10 tiles (32x24 pixels each)
 	iChanged = FindChangedRegion(pScreen, pAltScreen, LCD_CX, LCD_CY, iLCDPitch, iTileWidth, iTileHeight, u32Regions);
 	if (iChanged) // some area of the image changed
 	{
@@ -499,6 +508,9 @@ int i, j, k, x, y;
 	}
 } /* CopyLoop() */
 
+//
+// Parse the command  line options
+//
 static int ParseOpts(int argc, char *argv[])
 {
     int i = 1;
