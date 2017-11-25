@@ -129,7 +129,7 @@ int ParseConfig(char *szConfig)
 char *pBuf;
 int i, j, k, iLen;
 FILE *pf;
-struct uinput_setup usetup;
+struct uinput_user_dev uidev;
 
 	iKeyDefs = 0; // no keys defined
 	pf = fopen(szConfig, "rb");
@@ -164,19 +164,12 @@ struct uinput_setup usetup;
 				iKeyDefs++;
 			}
         	}
-		i++;
+		else
+		{
+			i++;
+		}
 	} // while parsing...
 	free(pBuf);
-
-	// Initialize the header pins specified to be GPIO inputs
-	for (i=0; i<iKeyDefs; i++)
-	{
-		if (spilcdConfigurePin(iGPIOList[i])) // problem
-		{
-			fprintf(stderr, "Error configuring pin %d as an input\n", iGPIOList[i]);
-			return 1;
-		}
-	}
 	// Set up the keypress simulator device
 	fdui = open("/dev/uinput", O_WRONLY | O_NONBLOCK);
 	if (fdui < 0)
@@ -189,13 +182,23 @@ struct uinput_setup usetup;
 	{
 		ioctl(fdui, UI_SET_KEYBIT, iKeyList[i]); // enable each key we will use
 	}
-	memset(&usetup, 0, sizeof(usetup));
-	usetup.id.bustype = BUS_USB; // fake device is a USB keyboard
-	usetup.id.vendor = 0x1234;
-	usetup.id.product = 0x5678;
-	strcpy(usetup.name, "BBCP GPIO Keyboard");
-	ioctl(fdui, UI_DEV_SETUP, &usetup);
-	ioctl(fdui, UI_DEV_CREATE);
+// old way?
+//	memset(&usetup, 0, sizeof(usetup));
+//	usetup.id.bustype = BUS_USB; // fake device is a USB keyboard
+//	usetup.id.vendor = 0x1234;
+//	usetup.id.product = 0x5678;
+//	strcpy(usetup.name, "BBCP GPIO Keyboard");
+//	ioctl(fdui, UI_DEV_SETUP, &usetup);
+	memset(&uidev, 0, sizeof(uidev));
+	snprintf(uidev.name, UINPUT_MAX_NAME_SIZE, "BBCP GPIO keyboard");
+	uidev.id.bustype = BUS_VIRTUAL;
+	write(fdui, &uidev, sizeof(uidev));
+
+	if (ioctl(fdui, UI_DEV_CREATE) < 0)
+	{
+		fprintf(stderr, "Error creating virtual keyboard device\n");
+		return 1;
+	}
 	return 0;
 
 } /* ParseConfig() */
@@ -612,6 +615,7 @@ int iVideoFrames = 0;
 int main(int argc, char* argv[])
 {
 pthread_t tinfo;
+int i;
 
 	if (argc < 2)
 	{
@@ -650,6 +654,17 @@ pthread_t tinfo;
 	{
 		printf("Error initializing the LCD/display\n");
 		return 0;
+	}
+
+	// Initialize the header pins specified to be GPIO inputs
+	// This needs to be done after initializing the LCD since
+	// SPI_LCD initializes the gpio functions in the LCD init
+	for (i=0; i<iKeyDefs; i++)
+	{
+		if (spilcdConfigurePin(iGPIOList[i])) // problem
+		{
+			fprintf(stderr, "Error configuring pin %d as an input\n", iGPIOList[i]);
+		}
 	}
 
 #ifndef _RPIZERO_
