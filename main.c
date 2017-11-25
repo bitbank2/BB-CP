@@ -30,6 +30,7 @@
 #include <sys/mman.h>
 #include <sys/ioctl.h>
 #include <linux/fb.h>
+#include <linux/uinput.h>
 #include <spi_lcd.h>
 
 // Use dispmanx API on RPi0
@@ -47,6 +48,9 @@ VC_RECT_T rect1;
 #define LCD_CX 320
 #define LCD_CY 240
 
+// Maximum supported GPIO pins
+#define MAX_GPIO 43
+
 // Pointers to the local copies of the framebuffer
 static unsigned char *pScreen, *pAltScreen;
 #ifndef _RPIZERO_
@@ -61,6 +65,10 @@ static int iLCDPitch; // bytes per line of our LCD buffer
 static int fbfd; // framebuffer file handle
 static int iTileWidth, iTileHeight;
 static int bRunning, bShowFPS, bLCDFlip, iSPIChan, iSPIFreq, iDC, iReset, iLED;
+static char szKeyConfig[256]; // text file defining GPIO keyboard mapping
+static int iKeyDefs; // number of GPIO keys defined
+static int iGPIOList[MAX_GPIO], iKeyList[MAX_GPIO], iKeyState[MAX_GPIO];
+static int fdui; // file handle for uinput
 //
 // Get the current time in nanoseconds
 //
@@ -73,6 +81,124 @@ static uint64_t NanoClock()
 	ns = time.tv_nsec + (time.tv_sec * 1000000000LL);
 	return ns;
 } /* NanoClock() */
+void SkipToEnd(char *pBuf, int *i, int iLen)
+{
+    int j = *i;
+    while (j < iLen)
+    {
+        if (pBuf[j] == 0xa || pBuf[j] == 0xd) // end of the line
+            break;
+        j++;
+    }
+    while (j < iLen && (pBuf[j] == 0xa || pBuf[j] == 0xd))
+    {
+        j++;
+    }
+    *i = j;
+} /* SkipToEnd() */
+
+int ParseNumber(char *pBuf, int *i, int iLen)
+{
+    char cTemp[32];
+    int iValue;
+    int k = 0;
+    int j = *i;
+    
+    // skip spaces and non numbers
+    while (j < iLen && (pBuf[j] < '0' || pBuf[j] > '9'))
+    {
+        j++;
+    }
+    if (j >= iLen) // went past end, problem
+        return 0;
+    while (j < iLen && k < 32 && (pBuf[j] >= '0' && pBuf[j] <= '9'))
+    {
+        cTemp[k++] = pBuf[j++];
+    }
+    cTemp[k] = '\0'; // terminate string
+    iValue = atoi(cTemp);
+    *i = j;
+    return iValue;
+} /* ParseNumber() */
+
+//
+// Parse config file which defines GPIO keyboard mapping
+//
+int ParseConfig(char *szConfig)
+{
+char *pBuf;
+int i, j, k, iLen;
+FILE *pf;
+struct uinput_setup usetup;
+
+	iKeyDefs = 0; // no keys defined
+	pf = fopen(szConfig, "rb");
+	if (pf == NULL)
+	{
+		fprintf(stderr, "Error opening file %s\n", szConfig);
+		return 1;
+	}
+	fseek(pf, 0, SEEK_END);
+	iLen = (int)ftell(pf); // get the file size
+	fseek(pf, 0, SEEK_SET);
+	pBuf = malloc(iLen); // buffer to read text file
+	fread(pBuf, 1, iLen, pf);
+	fclose(pf);
+
+	// parse the file
+	i = 0;
+	while (i < iLen)
+	{
+	        if (pBuf[i] == '#') // comment, skip line
+        	    SkipToEnd(pBuf, &i, iLen);
+        	else if (memcmp(&pBuf[i], "pin_", 4) == 0)
+        	{
+            		i+=4;
+			j = ParseNumber(pBuf, &i, iLen); // capture GPIO pin number
+			k = ParseNumber(pBuf, &i, iLen); // capture keyboard code
+			if (j <= MAX_GPIO && k >= 1 && k < 255) // valid?
+			{
+				iGPIOList[iKeyDefs] = j;
+				iKeyList[iKeyDefs] = k;
+				iKeyState[iKeyDefs] = 1; // set to on (not pressed)
+				iKeyDefs++;
+			}
+        	}
+		i++;
+	} // while parsing...
+	free(pBuf);
+
+	// Initialize the header pins specified to be GPIO inputs
+	for (i=0; i<iKeyDefs; i++)
+	{
+		if (spilcdConfigurePin(iGPIOList[i])) // problem
+		{
+			fprintf(stderr, "Error configuring pin %d as an input\n", iGPIOList[i]);
+			return 1;
+		}
+	}
+	// Set up the keypress simulator device
+	fdui = open("/dev/uinput", O_WRONLY | O_NONBLOCK);
+	if (fdui < 0)
+	{
+		fprintf(stderr, "Error opening /dev/uinput device\n");
+		return 1;
+	}
+	ioctl(fdui, UI_SET_EVBIT, EV_KEY);
+	for (i=0; i<iKeyDefs; i++)
+	{
+		ioctl(fdui, UI_SET_KEYBIT, iKeyList[i]); // enable each key we will use
+	}
+	memset(&usetup, 0, sizeof(usetup));
+	usetup.id.bustype = BUS_USB; // fake device is a USB keyboard
+	usetup.id.vendor = 0x1234;
+	usetup.id.product = 0x5678;
+	strcpy(usetup.name, "BBCP GPIO Keyboard");
+	ioctl(fdui, UI_DEV_SETUP, &usetup);
+	ioctl(fdui, UI_DEV_CREATE);
+	return 0;
+
+} /* ParseConfig() */
 
 //
 // Sleep for N nanonseconds
@@ -294,11 +420,45 @@ static void FBCapture(void)
 #endif // _RPIZERO_
 } /* FBCapture() */
 
+//
+// Turn GPIO button presses into keyboard events
+//
+void ProcessKeys(void)
+{
+int i, iState;
+struct input_event ie;
+
+	memset(&ie, 0, sizeof(ie));
+
+	// loop through all of the defined keys
+	for (i=0; i<iKeyDefs; i++)
+	{
+		iState = spilcdReadPin(iGPIOList[i]);
+		if (iState != iKeyState[i]) // need to send an event
+		{
+			iKeyState[i] = iState;
+			if (iState) // if state is off, send release
+				ie.value = 0;
+			else
+				ie.value = 1; // send press
+			ie.type = EV_KEY; // key event
+			ie.code = iKeyList[i];
+			write(fdui, &ie, sizeof(ie)); // send the event
+			ie.type = EV_SYN;
+			ie.code = SYN_REPORT;
+			ie.value = 0;
+			write(fdui, &ie, sizeof(ie)); // send a report			
+		}
+	} // for each key
+} /* ProcessKeys() */
+
 static void CopyLoop(void)
 {
 int iChanged;
 uint32_t u32Flags, u32Regions[32], *pRegions;
 int i, j, k, x, y;
+
+	ProcessKeys(); // manage GPIO keys
 
 	// Capture the current framebuffer
 	FBCapture();
@@ -372,6 +532,9 @@ static int ParseOpts(int argc, char *argv[])
         } else if (0 == strcmp("--lcd_led", argv[i])) {
             iLED = atoi(argv[i+1]);
             i += 2; 
+	} else if (0 == strcmp("--gpiokeys", argv[i])) {
+	    strcpy(szKeyConfig, argv[i+1]);
+	    i += 2;
         } else if (0 == strcmp("--showfps",argv[i])) {        
             bShowFPS = 1;
             i++;
@@ -396,6 +559,7 @@ static void ShowHelp(void)
         " --lcd_dc <pin number>    defaults to 18\n"
         " --lcd_rst <pin number>   defaults to 22\n"
         " --lcd_led <pin number>   defaults to 13\n"
+	" --gpiokeys <config file> \n"
         " --flip                   flips display 180 degrees\n"
         " --showfps                Show framerate\n"
         "\nExample usage:\n"
@@ -459,6 +623,9 @@ pthread_t tinfo;
 	iSPIChan = 0; // 0 for RPI, usually 1 for Orange Pi
 	iSPIFreq = 31250000; // good for RPI, use higher for AllWinner
 	bLCDFlip = 0;
+	strcpy(szKeyConfig, ""); // assume no GPIO keyboard mapping
+	iKeyDefs = 0; // assume no GPIO keys
+	fdui = -1;
 
 	// These are the header pin numbers of the ILI9341 control lines
 	// 18 means pin 18 on the 40 pin IO header
@@ -468,6 +635,15 @@ pthread_t tinfo;
 	iTileHeight = 24;
 
 	ParseOpts(argc, argv); // gather the command line parameters
+
+	if (strlen(szKeyConfig)) // if config file specified, parse it
+	{
+		if (ParseConfig(szKeyConfig))
+		{
+			fprintf(stderr, "Error configuring GPIO keys; re-check pin numbers for conflicts\n");
+			return 0;
+		}
+	}
 
 	// Initialize the SPI_LCD library and get a pointer to /dev/fb0
         if (InitDisplay(bLCDFlip, iSPIChan, iSPIFreq, iDC, iReset, iLED))
@@ -510,6 +686,12 @@ pthread_t tinfo;
 	bRunning = 0; // tell background thread to stop
 	NanoSleep(50000000LL); // wait 50ms for work to finish
 	spilcdShutdown();
+    // shut down the keypress simulator device
+	if (fdui >= 0)
+	{
+		ioctl(fdui, UI_DEV_DESTROY);
+		close(fdui);
+	}
 #ifdef _RPIZERO_
 	vc_dispmanx_resource_delete(screen_resource);
 	vc_dispmanx_display_close(display);

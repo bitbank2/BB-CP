@@ -1,0 +1,22 @@
+# sample GPIO key definitions for the PiPlay portable buttons
+#up
+pin_37 103
+#down
+pin_33 108
+#left
+pin_32 105
+#right
+pin_31 106
+#start = ENTER key
+pin_7 28
+#select = B
+pin_11 48
+#button a = Q
+pin_36 16
+#button b = W
+pin_38 17
+#button c = E
+pin_29 18
+#button d = Z
+pin_40 44
+
