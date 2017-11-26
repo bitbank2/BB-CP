@@ -34,7 +34,7 @@
 #include <spi_lcd.h>
 
 // Use dispmanx API on RPi0
-#ifdef _RPIZERO_
+#if defined( _RPIZERO_ ) || defined (_RPI3_)
 #include <bcm_host.h>
 DISPMANX_DISPLAY_HANDLE_T display;
 DISPMANX_RESOURCE_HANDLE_T screen_resource;
@@ -53,7 +53,7 @@ VC_RECT_T rect1;
 
 // Pointers to the local copies of the framebuffer
 static unsigned char *pScreen, *pAltScreen;
-#ifndef _RPIZERO_
+#if !defined( _RPIZERO_ ) && !defined( _RPI3_ )
 static unsigned char *pFB; // pointer to /dev/fb0
 static int iFBPitch; // bytes per line of /dev/fb0
 static int iScreenSize;
@@ -224,7 +224,7 @@ struct timespec ts;
 static int InitDisplay(int bLCDFlip, int iSPIChan, int iSPIFreq, int iDC, int iReset, int iLED)
 {
 
-#ifdef _RPIZERO_
+#if defined( _RPIZERO_ ) || defined( _RPI3_ )
 {
 	int ret;
 	bcm_host_init();
@@ -344,7 +344,7 @@ int iTotalChanged = 0;
 //
 static void FBCapture(void)
 {
-#ifdef _RPIZERO_
+#if defined( _RPIZERO_ ) || defined( _RPI3_ )
 	vc_dispmanx_snapshot(display, screen_resource, 0);
 	vc_dispmanx_resource_read_data(screen_resource, &rect1, pScreen, iLCDPitch);
 #else
@@ -683,7 +683,7 @@ int i;
 		}
 	}
 
-#ifndef _RPIZERO_
+#if !defined( _RPIZERO_ ) && !defined( _RPI3_ )
 	if (vinfo.xres > 640)
 		printf("Warning: the framebuffer is too large and will not be copied properly; sipported sizes are 640x480 and 320x240\n");
 	if (vinfo.bits_per_pixel == 32)
@@ -723,7 +723,7 @@ int i;
 		ioctl(fdui, UI_DEV_DESTROY);
 		close(fdui);
 	}
-#ifdef _RPIZERO_
+#if defined( _RPIZERO_ ) || defined( _RPI3_ )
 	vc_dispmanx_resource_delete(screen_resource);
 	vc_dispmanx_display_close(display);
 #endif // _RPIZERO_
