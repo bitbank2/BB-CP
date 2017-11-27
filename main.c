@@ -467,7 +467,7 @@ static void CopyLoop(void)
 {
 int iChanged;
 uint32_t u32Flags, u32Regions[32], *pRegions;
-int i, j, k, x, y;
+int i, j, k, x, y, iCount;
 
 	// Manage GPIO keys
 	ProcessKeys();
@@ -492,6 +492,7 @@ int i, j, k, x, y;
 		}
 		// Draw the changed tiles
 		pRegions = u32Regions;
+		iCount = 0; // number we've drawn
 		for (y=0; y<LCD_CY; y+=iTileHeight)
 		{
 			u32Flags = *pRegions++; // next set of row tile flags
@@ -500,6 +501,9 @@ int i, j, k, x, y;
 				if (u32Flags & 1) // this tile is dirty
 				{
 					spilcdDrawTile(x, y, iTileWidth, iTileHeight, &pAltScreen[(y*iLCDPitch)+x*2], iLCDPitch);
+					iCount++;
+					if (iCount == iChanged/2) // yield thread
+						NanoSleep(4000LL);
 				}
 				u32Flags >>= 1; // shift down to next bit flag	
 			}
@@ -651,8 +655,8 @@ int i;
 	// 18 means pin 18 on the 40 pin IO header
 	iDC = 18; iReset = 22; iLED = 13;
 
-	iTileWidth = 32; // for now - different values might be more efficient
-	iTileHeight = 24;
+	iTileWidth = 64; // for now - different values might be more efficient
+	iTileHeight = 30;
 
 	ParseOpts(argc, argv); // gather the command line parameters
 
