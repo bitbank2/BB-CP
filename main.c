@@ -24,6 +24,7 @@
 #include <stdint.h>
 #include <string.h>
 #include <unistd.h>
+#include <signal.h>
 #include <time.h>
 #include <fcntl.h>
 #include <pthread.h>
@@ -142,7 +143,7 @@ struct uinput_user_dev uidev;
 	iLen = (int)ftell(pf); // get the file size
 	fseek(pf, 0, SEEK_SET);
 	pBuf = malloc(iLen); // buffer to read text file
-	fread(pBuf, 1, iLen, pf);
+	i = fread(pBuf, 1, iLen, pf);
 	fclose(pf);
 
 	// parse the file
@@ -192,7 +193,7 @@ struct uinput_user_dev uidev;
 	memset(&uidev, 0, sizeof(uidev));
 	snprintf(uidev.name, UINPUT_MAX_NAME_SIZE, "BBCP GPIO keyboard");
 	uidev.id.bustype = BUS_VIRTUAL;
-	write(fdui, &uidev, sizeof(uidev));
+	i = write(fdui, &uidev, sizeof(uidev));
 
 	if (ioctl(fdui, UI_DEV_CREATE) < 0)
 	{
@@ -432,7 +433,7 @@ static void FBCapture(void)
 //
 void ProcessKeys(void)
 {
-int i, iState;
+int i, rc, iState;
 struct input_event ie;
 
 	memset(&ie, 0, sizeof(ie));
@@ -450,11 +451,12 @@ struct input_event ie;
 				ie.value = 1; // send press
 			ie.type = EV_KEY; // key event
 			ie.code = iKeyList[i];
-			write(fdui, &ie, sizeof(ie)); // send the event
+			rc = write(fdui, &ie, sizeof(ie)); // send the event
 			ie.type = EV_SYN;
 			ie.code = SYN_REPORT;
 			ie.value = 0;
-			write(fdui, &ie, sizeof(ie)); // send a report			
+			rc = write(fdui, &ie, sizeof(ie)); // send a report			
+			if (rc < 0) {}; // suppress compiler warning
 		}
 	} // for each key
 } /* ProcessKeys() */
@@ -632,6 +634,15 @@ int iVideoFrames = 0;
 	return NULL;
 } /* CopyThread() */
 
+//
+// Catch CTRL-C here
+//
+void signal_handler(int signum)
+{
+	printf("Ctrl-C hit; exiting...\n");
+	exit(0); // quit the program quietly
+} /* signal_handler() */
+
 int main(int argc, char* argv[])
 {
 pthread_t tinfo;
@@ -642,6 +653,9 @@ int i;
 		ShowHelp();
 		return 0;
 	}
+
+	signal(SIGINT, signal_handler); // catch CTRL-C
+
 	// Set default values
 	bShowFPS = 0;
 	iSPIChan = 0; // 0 for RPI, usually 1 for Orange Pi
