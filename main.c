@@ -70,6 +70,7 @@ static char szKeyConfig[256]; // text file defining GPIO keyboard mapping
 static int iKeyDefs; // number of GPIO keys defined
 static int iGPIOList[MAX_GPIO], iKeyList[MAX_GPIO], iKeyState[MAX_GPIO];
 static int fdui; // file handle for uinput
+void shutdown(void);
 //
 // Get the current time in nanoseconds
 //
@@ -640,8 +641,27 @@ int iVideoFrames = 0;
 void signal_handler(int signum)
 {
 	printf("Ctrl-C hit; exiting...\n");
+	shutdown();
 	exit(0); // quit the program quietly
 } /* signal_handler() */
+
+void shutdown(void)
+{
+    // Quit library and free resources
+        bRunning = 0; // tell background thread to stop
+        NanoSleep(50000000LL); // wait 50ms for work to finish
+        spilcdShutdown();
+    // shut down the keypress simulator device
+        if (fdui >= 0)
+        {
+                ioctl(fdui, UI_DEV_DESTROY);
+                close(fdui);
+        }
+#if defined( _RPIZERO_ ) || defined( _RPI3_ )
+        vc_dispmanx_resource_delete(screen_resource);
+        vc_dispmanx_display_close(display);
+#endif // _RPIZERO_
+} /* shutdown() */
 
 int main(int argc, char* argv[])
 {
@@ -653,8 +673,6 @@ int i;
 		ShowHelp();
 		return 0;
 	}
-
-	signal(SIGINT, signal_handler); // catch CTRL-C
 
 	// Set default values
 	bShowFPS = 0;
@@ -708,6 +726,8 @@ int i;
 		printf("Warning: the framebuffer bit depth is 32-bpp, ideally it should be 16-bpp for fastest results\n");
 #endif // !_RPIZERO_
 
+	signal(SIGINT, signal_handler); // catch CTRL-C
+
 // Do a quick performance test to make sure everything is working correctly
 	{
 	uint64_t llTime;
@@ -731,20 +751,7 @@ int i;
 
 	getchar(); // wait for user to press enter
 
-    // Quit library and free resources
-	bRunning = 0; // tell background thread to stop
-	NanoSleep(50000000LL); // wait 50ms for work to finish
-	spilcdShutdown();
-    // shut down the keypress simulator device
-	if (fdui >= 0)
-	{
-		ioctl(fdui, UI_DEV_DESTROY);
-		close(fdui);
-	}
-#if defined( _RPIZERO_ ) || defined( _RPI3_ )
-	vc_dispmanx_resource_delete(screen_resource);
-	vc_dispmanx_display_close(display);
-#endif // _RPIZERO_
+	shutdown();
 
    return 0;
 } /* main() */
