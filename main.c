@@ -69,6 +69,7 @@ static char szKeyConfig[256]; // text file defining GPIO keyboard mapping
 static int iKeyDefs; // number of GPIO keys defined
 static int iGPIOList[MAX_GPIO], iKeyList[MAX_GPIO], iKeyState[MAX_GPIO];
 static int fdui; // file handle for uinput
+static int bBackground; // indicates if our process is running in the bkgd
 //
 // Get the current time in nanoseconds
 //
@@ -532,6 +533,9 @@ static int ParseOpts(int argc, char *argv[])
         if (0 == strcmp("--spi_bus", argv[i])) {
             iSPIChan = atoi(argv[i+1]);
             i += 2;
+	} else if (0 == strcmp("--background", argv[i])) {
+	    bBackground = 1;
+	    i++;
         } else if (0 == strcmp("--spi_freq", argv[i])) {
             iSPIFreq = atoi(argv[i+1]);
             i += 2;
@@ -577,6 +581,7 @@ static void ShowHelp(void)
 	" --gpiokeys <config file> \n"
         " --flip                   flips display 180 degrees\n"
         " --showfps                Show framerate\n"
+	" --background             suppress printf output if running as a bkgd process\n"
         "\nExample usage:\n"
         "sudo ./bbcp --spi_bus 1 spi_freq 46000000 --flip\n"
     );
@@ -603,7 +608,8 @@ int iVideoFrames = 0;
 			fps = (float)iVideoFrames;
 			fps = fps * 1000000000.0;
 			fps = fps / (float)(llTime-llOldTime);
-			printf("%02.1f FPS\n", fps);
+			if (!bBackground)
+				printf("%02.1f FPS\n", fps);
 			iVideoFrames = 0;
 			llOldTime = llTime;
 		}
@@ -630,8 +636,8 @@ int iVideoFrames = 0;
 
 int main(int argc, char* argv[])
 {
-pthread_t tinfo;
 int i;
+pthread_t tinfo;
 
 	if (argc < 2)
 	{
@@ -646,7 +652,7 @@ int i;
 	strcpy(szKeyConfig, ""); // assume no GPIO keyboard mapping
 	iKeyDefs = 0; // assume no GPIO keys
 	fdui = -1;
-
+	bBackground = 0; // assume we're not a background process
 	// These are the header pin numbers of the ILI9341 control lines
 	// 18 means pin 18 on the 40 pin IO header
 	iDC = 18; iReset = 22; iLED = 13;
@@ -668,7 +674,7 @@ int i;
 	// Initialize the SPI_LCD library and get a pointer to /dev/fb0
         if (InitDisplay(bLCDFlip, iSPIChan, iSPIFreq, iDC, iReset, iLED))
 	{
-		printf("Error initializing the LCD/display\n");
+		fprintf(stderr, "Error initializing the LCD/display\n");
 		return 0;
 	}
 
@@ -701,17 +707,26 @@ int i;
 			CopyLoop();
 			iFrames++;
 		}
-		printf("Perf test: worst case framerate = %d FPS\n", iFrames);
-		if (iFrames < 25)
-			printf("<25FPS indicates there is something not configured correctly with your SW/HW\n");
+		if (!bBackground)
+		{
+			printf("Perf test: worst case framerate = %d FPS\n", iFrames);
+			if (iFrames < 25)
+				printf("<25FPS indicates there is something not configured correctly with your SW/HW\n");
+		}
 	}
 
 	// Start screen copy thread
 	bRunning = 1;
         pthread_create(&tinfo, NULL, CopyThread, NULL);
-	printf("Press ENTER to quit\n");
-
-	getchar(); // wait for user to press enter
+	if (!bBackground)
+	{
+		printf("Press ENTER to quit\n");
+		getchar(); // wait for user to press enter
+	}
+	else // run forever
+	{
+		while (1) {};
+	}
 
     // Quit library and free resources
 	bRunning = 0; // tell background thread to stop
