@@ -44,5 +44,8 @@ sudo ./bbcp <options>
 
 Press ENTER to quit bbcp. This is necessary because if you kill it by pressing
 ctrl-c, some SPI libraries (e.g. PIGPIO) won't shutdown and to run it again
-will require a reboot.
+will require a reboot.<br>
+<br>
 
+If you find this code useful, please consider buying me a cup of coffee<br>
+[![paypal](https://www.paypalobjects.com/en_US/i/btn/btn_donateCC_LG.gif)](https://www.paypal.com/cgi-bin/webscr?cmd=_s-xclick&hosted_button_id=SR4F44J2UR8S4)

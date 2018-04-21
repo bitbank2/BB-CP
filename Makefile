@@ -1,7 +1,12 @@
 PROCESSOR:=$(shell grep -o "BCM.*" /proc/cpuinfo)
-ifeq ($(PROCESSOR), BCM2835)
+ifeq ($(PROCESSOR), BCM2708)
 # Must be Raspberry Pi Zero
 $(info Building for Raspberry Pi Zero)
+CFLAGS=-c -I/opt/vc/include -Wall -O3 -D_RPIZERO_
+LIBS= -lspi_lcd -lpigpio -L/opt/vc/lib -lbcm_host -lpthread -lm
+else ifeq ($(PROCESSOR), BCM2835)
+# Must be Raspberry Pi ZeroW
+$(info Building for Raspberry Pi ZeroW)
 CFLAGS=-c -I/opt/vc/include -Wall -O3 -D_RPIZERO_
 LIBS= -lspi_lcd -lpigpio -L/opt/vc/lib -lbcm_host -lpthread -lm
 else ifeq ($(PROCESSOR), BCM2837)

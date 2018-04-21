@@ -24,6 +24,7 @@
 #include <stdint.h>
 #include <string.h>
 #include <unistd.h>
+#include <signal.h>
 #include <time.h>
 #include <fcntl.h>
 #include <pthread.h>
@@ -70,6 +71,7 @@ static int iKeyDefs; // number of GPIO keys defined
 static int iGPIOList[MAX_GPIO], iKeyList[MAX_GPIO], iKeyState[MAX_GPIO];
 static int fdui; // file handle for uinput
 static int bBackground; // indicates if our process is running in the bkgd
+void shutdown(void);
 //
 // Get the current time in nanoseconds
 //
@@ -143,7 +145,7 @@ struct uinput_user_dev uidev;
 	iLen = (int)ftell(pf); // get the file size
 	fseek(pf, 0, SEEK_SET);
 	pBuf = malloc(iLen); // buffer to read text file
-	fread(pBuf, 1, iLen, pf);
+	i = fread(pBuf, 1, iLen, pf);
 	fclose(pf);
 
 	// parse the file
@@ -193,7 +195,7 @@ struct uinput_user_dev uidev;
 	memset(&uidev, 0, sizeof(uidev));
 	snprintf(uidev.name, UINPUT_MAX_NAME_SIZE, "BBCP GPIO keyboard");
 	uidev.id.bustype = BUS_VIRTUAL;
-	write(fdui, &uidev, sizeof(uidev));
+	i = write(fdui, &uidev, sizeof(uidev));
 
 	if (ioctl(fdui, UI_DEV_CREATE) < 0)
 	{
@@ -433,7 +435,7 @@ static void FBCapture(void)
 //
 void ProcessKeys(void)
 {
-int i, iState;
+int i, rc, iState;
 struct input_event ie;
 
 	memset(&ie, 0, sizeof(ie));
@@ -451,11 +453,12 @@ struct input_event ie;
 				ie.value = 1; // send press
 			ie.type = EV_KEY; // key event
 			ie.code = iKeyList[i];
-			write(fdui, &ie, sizeof(ie)); // send the event
+			rc = write(fdui, &ie, sizeof(ie)); // send the event
 			ie.type = EV_SYN;
 			ie.code = SYN_REPORT;
 			ie.value = 0;
-			write(fdui, &ie, sizeof(ie)); // send a report			
+			rc = write(fdui, &ie, sizeof(ie)); // send a report			
+			if (rc < 0) {}; // suppress compiler warning
 		}
 	} // for each key
 } /* ProcessKeys() */
@@ -468,7 +471,7 @@ static void CopyLoop(void)
 {
 int iChanged;
 uint32_t u32Flags, u32Regions[32], *pRegions;
-int i, j, k, x, y;
+int i, j, k, x, y, iCount;
 
 	// Manage GPIO keys
 	ProcessKeys();
@@ -493,6 +496,7 @@ int i, j, k, x, y;
 		}
 		// Draw the changed tiles
 		pRegions = u32Regions;
+		iCount = 0; // number we've drawn
 		for (y=0; y<LCD_CY; y+=iTileHeight)
 		{
 			u32Flags = *pRegions++; // next set of row tile flags
@@ -501,6 +505,9 @@ int i, j, k, x, y;
 				if (u32Flags & 1) // this tile is dirty
 				{
 					spilcdDrawTile(x, y, iTileWidth, iTileHeight, &pAltScreen[(y*iLCDPitch)+x*2], iLCDPitch);
+					iCount++;
+					if (iCount == iChanged/2) // yield thread
+						NanoSleep(4000LL);
 				}
 				u32Flags >>= 1; // shift down to next bit flag	
 			}
@@ -634,6 +641,34 @@ int iVideoFrames = 0;
 	return NULL;
 } /* CopyThread() */
 
+//
+// Catch CTRL-C here
+//
+void signal_handler(int signum)
+{
+	printf("Ctrl-C hit; exiting...\n");
+	shutdown();
+	exit(0); // quit the program quietly
+} /* signal_handler() */
+
+void shutdown(void)
+{
+    // Quit library and free resources
+        bRunning = 0; // tell background thread to stop
+        NanoSleep(50000000LL); // wait 50ms for work to finish
+        spilcdShutdown();
+    // shut down the keypress simulator device
+        if (fdui >= 0)
+        {
+                ioctl(fdui, UI_DEV_DESTROY);
+                close(fdui);
+        }
+#if defined( _RPIZERO_ ) || defined( _RPI3_ )
+        vc_dispmanx_resource_delete(screen_resource);
+        vc_dispmanx_display_close(display);
+#endif // _RPIZERO_
+} /* shutdown() */
+
 int main(int argc, char* argv[])
 {
 int i;
@@ -644,6 +679,7 @@ pthread_t tinfo;
 		ShowHelp();
 		return 0;
 	}
+
 	// Set default values
 	bShowFPS = 0;
 	iSPIChan = 0; // 0 for RPI, usually 1 for Orange Pi
@@ -657,8 +693,8 @@ pthread_t tinfo;
 	// 18 means pin 18 on the 40 pin IO header
 	iDC = 18; iReset = 22; iLED = 13;
 
-	iTileWidth = 32; // for now - different values might be more efficient
-	iTileHeight = 24;
+	iTileWidth = 64; // for now - different values might be more efficient
+	iTileHeight = 30;
 
 	ParseOpts(argc, argv); // gather the command line parameters
 
@@ -696,6 +732,8 @@ pthread_t tinfo;
 		printf("Warning: the framebuffer bit depth is 32-bpp, ideally it should be 16-bpp for fastest results\n");
 #endif // !_RPIZERO_
 
+	signal(SIGINT, signal_handler); // catch CTRL-C
+
 // Do a quick performance test to make sure everything is working correctly
 	{
 	uint64_t llTime;
@@ -728,20 +766,7 @@ pthread_t tinfo;
 		while (1) {};
 	}
 
-    // Quit library and free resources
-	bRunning = 0; // tell background thread to stop
-	NanoSleep(50000000LL); // wait 50ms for work to finish
-	spilcdShutdown();
-    // shut down the keypress simulator device
-	if (fdui >= 0)
-	{
-		ioctl(fdui, UI_DEV_DESTROY);
-		close(fdui);
-	}
-#if defined( _RPIZERO_ ) || defined( _RPI3_ )
-	vc_dispmanx_resource_delete(screen_resource);
-	vc_dispmanx_display_close(display);
-#endif // _RPIZERO_
+	shutdown();
 
    return 0;
 } /* main() */
