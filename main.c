@@ -274,7 +274,7 @@ static int InitDisplay(int bLCDFlip, int iSPIChan, int iSPIFreq, int iDC, int iR
 
 	if (spilcdInit(LCD_ILI9341, bLCDFlip, iSPIChan, iSPIFreq, iDC, iReset, iLED))
 		return 1;
-	spilcdSetOrientation(LCD_ORIENTATION_LANDSCAPE);
+	spilcdSetOrientation(LCD_ORIENTATION_ROTATED); // we want landscape mode on the ili9341; an ili9342 wouldn't require this
 	
 	// Allocate 2 local copies of the framebuffer for comparison
 	iLCDPitch = LCD_CX * 2;
